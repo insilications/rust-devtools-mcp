@@ -5,28 +5,129 @@ mod lsp;
 mod mcp;
 mod project;
 
+use std::{
+    borrow::Cow,
+    path::{Path, PathBuf},
+};
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use context::{Context as ContextType, ContextNotification};
 use lsp::LspNotification;
 use mcp::run_server;
-use std::path::PathBuf;
 use tokio::signal;
 use tracing::{error, info, warn};
-use tracing_subscriber::{
-    EnvFilter, Layer, fmt::format::PrettyFields, layer::SubscriberExt, util::SubscriberInitExt,
-};
+use tracing_subscriber::{EnvFilter, Layer, fmt::format::PrettyFields, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Beautify path display by converting long paths to a more concise format
+#[must_use]
+pub fn beautify_path3(path: &Path) -> String {
+    // ---------- 1. Fast-path: relative to CWD ---------------------------------
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Ok(rel) = path.strip_prefix(&cwd) {
+            if rel.components().next().is_some() {
+                let mut rel_cow: Cow<'_, str> = rel.to_string_lossy();
+                if rel_cow.contains('\\') {
+                    rel_cow = Cow::Owned(rel_cow.replace('\\', "/"));
+                }
+                return format!("📁 ./{}", rel_cow);
+            }
+        }
+    }
+
+    // ---------- 2. One UTF-8 conversion of the full path ----------------------
+    let mut whole: Cow<'_, str> = {
+        // temporary value so we don’t assign to a still-borrowed `whole`
+        let tmp: Cow<'_, str> = path.to_string_lossy();
+
+        // Remove the Windows “\\?\” prefix
+        match tmp {
+            // Already borrowed from the original `Path` → we can keep borrowing
+            Cow::Borrowed(s) if s.starts_with(r"\\?\") => Cow::Borrowed(&s[r"\\?\".len()..]),
+
+            // Owned String → allocate a new (shorter) String
+            Cow::Owned(ref s) if s.starts_with(r"\\?\") => Cow::Owned(s[r"\\?\".len()..].to_owned()),
+
+            // Nothing to strip
+            _ => tmp,
+        }
+    };
+
+    // ---------- 3. Compact representation for very long paths -----------------
+    if whole.len() > 50 {
+        if let Some(name) = path.file_name() {
+            if let Some(parent_name) = path.parent().and_then(|p| p.file_name()) {
+                return format!("📁 {}/{}", parent_name.to_string_lossy(), name.to_string_lossy());
+            }
+            return format!("📁 {}", name.to_string_lossy());
+        }
+    }
+
+    // ---------- 4. Normal case: final normalisation ---------------------------
+    if whole.contains('\\') {
+        whole = Cow::Owned(whole.replace('\\', "/"));
+    }
+
+    format!("📁 {}", whole)
+}
+
+#[must_use]
+pub fn beautify_path2(path: &std::path::Path) -> String {
+    let path_str = path.to_string_lossy();
+
+    // Remove Windows \\?\\ prefix
+    let cleaned = path_str.strip_prefix(r"\\?\\").unwrap_or(&path_str);
+
+    // If path is too long, only show project name and simplified parent path.
+    // This check is first to avoid the expensive current_dir() call for long paths.
+    if cleaned.len() > 50 {
+        if let Some(project_name) = path.file_name() {
+            let name = project_name.to_string_lossy();
+            if let Some(parent) = path.parent() {
+                if let Some(grandparent) = parent.file_name() {
+                    return format!("📁 {}/{}", grandparent.to_string_lossy(), name);
+                }
+            }
+            return format!("📁 {}", name);
+        }
+    }
+
+    // If it's a subdirectory of current working directory, use relative path.
+    // This involves a syscall and is therefore potentially slow.
+    if let Ok(current_dir) = std::env::current_dir() {
+        if let Ok(relative) = path.strip_prefix(&current_dir) {
+            let rel_str = relative.to_string_lossy();
+            if !rel_str.is_empty() {
+                // OPTIMIZATION: Avoid allocation from `replace` if no backslashes are present.
+                // Use Cow<str> to hold either a borrowed slice or a new owned String.
+                let normalized_rel = if rel_str.contains('\\') {
+                    Cow::Owned(rel_str.replace('\\', "/"))
+                } else {
+                    rel_str // This is already a Cow<'_, str>
+                };
+                return format!("📁 ./{}", normalized_rel);
+            }
+        }
+    }
+
+    // Fallback: Replace backslashes with forward slashes for aesthetics.
+    // OPTIMIZATION: Apply the same Cow trick to avoid allocation if not needed.
+    let normalized = if cleaned.contains('\\') {
+        Cow::Owned(cleaned.replace('\\', "/"))
+    } else {
+        Cow::Borrowed(cleaned)
+    };
+
+    format!("📁 {}", normalized)
+}
+
+/// Beautify path display by converting long paths to a more concise format
+#[must_use]
 pub fn beautify_path(path: &std::path::Path) -> String {
     let path_str = path.to_string_lossy();
 
     // Remove Windows \\?\\ prefix
-    let cleaned = if path_str.starts_with("\\\\?\\") {
-        &path_str[4..]
-    } else {
-        &path_str
-    };
+    let cleaned = path_str.strip_prefix(r"\\?\").unwrap_or(&path_str);
 
     // Get project name (last directory name)
     if let Some(project_name) = path.file_name() {
@@ -118,8 +219,6 @@ enum ProjectCommands {
     Clear,
 }
 
-
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -133,10 +232,7 @@ async fn main() -> Result<()> {
         .boxed();
 
     tracing_subscriber::registry()
-        .with(
-            (EnvFilter::builder().try_from_env())
-                .unwrap_or_else(|_| EnvFilter::new("rust_devtools_mcp=info")),
-        )
+        .with((EnvFilter::builder().try_from_env()).unwrap_or_else(|_| EnvFilter::new("rust_devtools_mcp=info")))
         .with(log_layer)
         .init();
 
@@ -164,14 +260,8 @@ async fn run_serve(args: ServerConfig, config_path: PathBuf) -> Result<()> {
             port: args.port,
         },
         _ => {
-            error!(
-                "Invalid transport type: {}. Valid options: stdio, sse, streamable-http",
-                args.transport
-            );
-            return Err(anyhow::anyhow!(
-                "Invalid transport type: {}",
-                args.transport
-            ));
+            error!("Invalid transport type: {}. Valid options: stdio, sse, streamable-http", args.transport);
+            return Err(anyhow::anyhow!("Invalid transport type: {}", args.transport));
         }
     };
 
@@ -204,24 +294,14 @@ async fn run_serve(args: ServerConfig, config_path: PathBuf) -> Result<()> {
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     let main_loop_fut = async {
-        info!(
-            "Starting server on {}:{}",
-            context.address_information().0,
-            context.address_information().1
-        );
-        info!(
-            "Using configuration file: {}",
-            context.config_path().display()
-        );
+        info!("Starting server on {}:{}", context.address_information().0, context.address_information().1);
+        info!("Using configuration file: {}", context.config_path().display());
         if context.project_descriptions().await.is_empty() {
             warn!(
                 "No projects found. Once connected, add one using the 'manage_projects' tool with add_project_path parameter or the CLI: `rust-devtools-mcp projects add <path>`"
             );
         }
-        info!(
-            "Cursor MCP JSON (for .cursor/mcp.json):\n---\n{}\n---",
-            context.mcp_configuration()
-        );
+        info!("Cursor MCP JSON (for .cursor/mcp.json):\n---\n{}\n---", context.mcp_configuration());
 
         // Immediately show connection information
         println!();
@@ -243,10 +323,7 @@ async fn run_serve(args: ServerConfig, config_path: PathBuf) -> Result<()> {
         let mut last_indexing_activity = std::time::Instant::now();
         let mut any_stage_completed = false;
 
-        info!(
-            "Initial state - indexing_finished_sent: {}",
-            indexing_finished_sent
-        );
+        info!("Initial state - indexing_finished_sent: {}", indexing_finished_sent);
 
         loop {
             while let Ok(notification) = receiver.try_recv() {
@@ -273,18 +350,10 @@ async fn run_serve(args: ServerConfig, config_path: PathBuf) -> Result<()> {
                                 .unwrap_or(false);
 
                             if is_cache_priming {
-                                print!(
-                                    "[{}] {}",
-                                    beautify_path(&notification_path),
-                                    notification.description()
-                                );
+                                print!("[{}] {}", beautify_path(&notification_path), notification.description());
                                 io::stdout().flush().unwrap();
                             } else {
-                                info!(
-                                    "[{}] {}",
-                                    beautify_path(&notification_path),
-                                    notification.description()
-                                );
+                                info!("[{}] {}", beautify_path(&notification_path), notification.description());
                             }
                         } else {
                             // This is a WorkDoneProgress::End event for a specific stage
@@ -311,11 +380,7 @@ async fn run_serve(args: ServerConfig, config_path: PathBuf) -> Result<()> {
                             io::stdout().flush().unwrap();
 
                             // Show stage completion message
-                            info!(
-                                "[{}] ✅ {} Stage: Completed",
-                                beautify_path(project),
-                                stage_name
-                            );
+                            info!("[{}] ✅ {} Stage: Completed", beautify_path(project), stage_name);
 
                             // Mark indexing as finished for any known indexing stage completion
                             if is_indexing_stage {
@@ -326,11 +391,7 @@ async fn run_serve(args: ServerConfig, config_path: PathBuf) -> Result<()> {
                         }
                     }
                     other_notification => {
-                        info!(
-                            "[{}] {}",
-                            beautify_path(&notification_path),
-                            other_notification.description()
-                        );
+                        info!("[{}] {}", beautify_path(&notification_path), other_notification.description());
                     }
                 }
             }
@@ -364,10 +425,11 @@ async fn run_serve(args: ServerConfig, config_path: PathBuf) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::unused_async)]
 async fn handle_projects(command: ProjectCommands, config_path: PathBuf) -> Result<()> {
+    use std::{collections::HashMap, fs};
+
     use crate::context::{SerConfig, SerProject};
-    use std::collections::HashMap;
-    use std::fs;
 
     // For CLI commands, we work directly with the config file instead of starting services
     let mut config = if config_path.exists() {
@@ -380,14 +442,16 @@ async fn handle_projects(command: ProjectCommands, config_path: PathBuf) -> Resu
     };
 
     match command {
-        ProjectCommands::Add { path } => {
+        ProjectCommands::Add {
+            path,
+        } => {
             let absolute_path = path.canonicalize()?;
             println!("✅ Adding project: {}", beautify_path(&absolute_path));
 
-            let project = crate::project::Project::new(&absolute_path)?;
             let ser_project = SerProject {
-                root: project.root().clone(),
-                ignore_crates: project.ignore_crates().to_vec(),
+                root: absolute_path.clone(),
+                ignore_crates: vec![],
+                rust_analyzer: None,
             };
 
             config.projects.insert(absolute_path.clone(), ser_project);
@@ -401,7 +465,9 @@ async fn handle_projects(command: ProjectCommands, config_path: PathBuf) -> Resu
 
             println!("🎉 Project successfully added to workspace!");
         }
-        ProjectCommands::Remove { path_or_name } => {
+        ProjectCommands::Remove {
+            path_or_name,
+        } => {
             // Try to find project by name first, then by path
             let mut found_project = None;
             let mut project_to_remove = None;
@@ -448,10 +514,7 @@ async fn handle_projects(command: ProjectCommands, config_path: PathBuf) -> Resu
             } else {
                 println!("📋 Projects in workspace:");
                 for (root, project) in &config.projects {
-                    let name = root
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("<unknown>");
+                    let name = root.file_name().and_then(|n| n.to_str()).unwrap_or("<unknown>");
                     println!("  • {} {}", name, beautify_path(&project.root));
                 }
             }
@@ -493,14 +556,8 @@ async fn handle_config(args: ServerConfig, config_path: PathBuf) -> Result<()> {
             port: args.port,
         },
         _ => {
-            error!(
-                "Invalid transport type: {}. Valid options: stdio, sse, streamable-http",
-                args.transport
-            );
-            return Err(anyhow::anyhow!(
-                "Invalid transport type: {}",
-                args.transport
-            ));
+            error!("Invalid transport type: {}. Valid options: stdio, sse, streamable-http", args.transport);
+            return Err(anyhow::anyhow!("Invalid transport type: {}", args.transport));
         }
     };
 

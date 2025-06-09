@@ -1,49 +1,61 @@
 [package]
-name = "rust-devtools-mcp"
-version = "0.1.0"
-edition = "2024"
+categories  = ["development-tools"]
+description = "A rust-analyzer Model Context Protocol (MCP) server."
+edition     = "2024"
+keywords    = ["development-tools", "language-server-protocol", "lsp", "mcp", "model-context-protocol"]
+license     = "MIT"
+name        = "rust-devtools-mcp"
+readme      = "README.md"
+repository  = "https://github.com/terhechte/cursor-rust-tools"
+version     = "0.1.0"
 
 [[bin]]
 name = "rust-devtools-mcp"
 path = "src/main.rs"
 
 [dependencies]
-anyhow = "1.0"
-async-lsp = "0.2"
-async-process = "2.3"
-flume = "0.11"
+anyhow        = "1.0.98"
+async-lsp     = { version = "0.2.2", features = ["client-monitor", "omni-trait", "stdio", "tokio", "tracing"] }
+async-process = "2.3.1"
+flume         = "0.11.1"
 # Using 0.95.1 because newer versions switched to fluent_uri which has interoperability issues
 # See: https://github.com/gluon-lang/lsp-types/issues/284
 # - Lacks conversion methods between Uri types
 # - Missing file path handling utilities
 # - No join functionality for URIs
+axum = "0.8.4"
+clap = { version = "4.5.39", features = ["derive"] }
+dashmap = "6.1.0"
+fuzzt = "0.3.1"
+glob = "0.3.2"
 lsp-types = "0.95.1"
-axum = "0.8"
-rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", rev = "db03f63", features = [
-    "server",
-    "transport-sse-server",
-    "transport-io",
-    "transport-streamable-http-server",
-    "macros",
-    "schemars",
-] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tokio = { version = "1.44", features = ["full"] }
-tower = "0.5"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-url = "2.5"
-fuzzt = "0.3"
-regex = "1.11"
-glob = "0.3"
-toml = "0.8"
-shellexpand = "3.1"
 notify-debouncer-mini = "0.6"
-clap = { version = "4.5", features = ["derive"] }
-dashmap = "6.1"
-rayon = "1.8"
+rayon = "1.10.0"
+regex = "1.11.1"
+rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", rev = "db03f63", features = [
+  "macros",
+  "schemars",
+  "server",
+  "transport-io",
+  "transport-sse-server",
+  "transport-streamable-http-server",
+] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+shellexpand = "3.1.1"
+tokio = { version = "1.45.1", features = ["full"] }
+toml = "0.8.23"
+tower = "0.5.2"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+url = "2.5.4"
 
-[profile.release]
-debug = "limited"
-lto = "thin"
+[lints.clippy]
+all                     = "warn"
+cargo                   = "warn"
+inline_always           = { level = "allow", priority = 1 }
+missing_const_for_fn    = { level = "allow", priority = 1 }
+multiple_crate_versions = { level = "allow", priority = 1 }
+nursery                 = "warn"
+pedantic                = "warn"
+too_many_lines          = { level = "allow", priority = 1 }

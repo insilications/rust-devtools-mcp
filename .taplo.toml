@@ -1,0 +1,23 @@
+exclude = ["target"]
+include = ["**/.rustfmt.toml", "**/.taplo.toml", "**/Cargo.toml"]
+
+[formatting]
+align_comments        = true  # Align consecutive comments after entries and items vertically. This applies to comments that are after entries or array items.
+align_entries         = true  # Align entries vertically. Entries that have table headers, comments, or blank lines between them are not aligned.
+allowed_blank_lines   = 2     # The maximum amount of consecutive blank lines allowed.
+array_auto_collapse   = true  # Automatically collapse arrays if they fit in one line.
+array_auto_expand     = true  # Automatically expand arrays to multiple lines when they exceed column_width characters.
+array_trailing_comma  = true  # Put trailing commas for multiline arrays.
+column_width          = 120   # Target maximum column width after which arrays are expanded into new lines.
+compact_arrays        = true  # Omit whitespace padding inside single-line arrays.
+compact_entries       = false # Omit whitespace around =.
+compact_inline_tables = false # Omit whitespace padding inside inline tables.
+crlf                  = false # Use CRLF line endings.
+indent_entries        = false # Indent entries under tables.
+indent_string         = "  "  # Indentation to use, should be tabs or spaces but technically could be anything.
+indent_tables         = false # Indent subtables if they come in order.
+inline_table_expand   = true  # Expand values (e.g. arrays) inside inline tables.
+reorder_arrays        = true  # Alphabetically reorder array values that are not separated by blank lines.
+reorder_inline_tables = true  # Alphabetically reorder inline tables.
+reorder_keys          = true  # Alphabetically reorder keys that are not separated by blank lines.
+trailing_newline      = true  # Add trailing newline to the source.

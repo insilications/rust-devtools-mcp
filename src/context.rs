@@ -1,20 +1,21 @@
+use std::{
+    collections::HashMap,
+    fs, mem,
+    path::{Path, PathBuf},
+    sync::{Arc, atomic::AtomicBool},
+};
+
 use anyhow::Result;
 use dashmap::DashMap;
-use std::collections::HashMap;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-
-use crate::cargo_remote::CargoRemote;
-use crate::lsp::LspNotification;
-use crate::mcp::McpNotification;
-use crate::{
-    lsp::RustAnalyzerLsp,
-    project::{Project, TransportType},
-};
 use flume::Sender;
 use serde::{Deserialize, Serialize};
+
+use crate::{
+    cargo_remote::CargoRemote,
+    lsp::{LspNotification, RustAnalyzerLsp},
+    mcp::McpNotification,
+    project::{Project, TransportType},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectDescription {
@@ -35,9 +36,18 @@ pub enum ContextNotification {
 impl ContextNotification {
     pub fn notification_path(&self) -> PathBuf {
         match self {
-            ContextNotification::Lsp(LspNotification::Indexing { project, .. }) => project.clone(),
-            ContextNotification::Mcp(McpNotification::Response { project, .. }) => project.clone(),
-            ContextNotification::Mcp(McpNotification::CodeActionsUpdated { project, .. }) => project.clone(),
+            ContextNotification::Lsp(LspNotification::Indexing {
+                project,
+                ..
+            }) => project.clone(),
+            ContextNotification::Mcp(McpNotification::Response {
+                project,
+                ..
+            }) => project.clone(),
+            ContextNotification::Mcp(McpNotification::CodeActionsUpdated {
+                project,
+                ..
+            }) => project.clone(),
             ContextNotification::ProjectAdded(project) => project.clone(),
             ContextNotification::ProjectRemoved(project) => project.clone(),
             ContextNotification::ProjectDescriptions(_) => PathBuf::from("project_descriptions"),
@@ -69,9 +79,7 @@ impl ContextNotification {
 
                         let mut parts = vec![format!("{} {}", stage_icon, stage_name)];
 
-                        if let (Some(current), Some(total)) =
-                            (progress.current_count, progress.total_count)
-                        {
+                        if let (Some(current), Some(total)) = (progress.current_count, progress.total_count) {
                             let percentage = (current as f32 / total as f32 * 100.0) as u32;
                             parts.push(format!("[{}/{}] {}%", current, total, percentage));
                         } else if let Some(percentage) = progress.percentage {
@@ -90,10 +98,16 @@ impl ContextNotification {
                     "✅ LSP Indexing: Finished".to_string()
                 }
             }
-            ContextNotification::Mcp(McpNotification::Response { content, .. }) => {
+            ContextNotification::Mcp(McpNotification::Response {
+                content,
+                ..
+            }) => {
                 format!("MCP Response: {:?}", content)
             }
-            ContextNotification::Mcp(McpNotification::CodeActionsUpdated { project, action_count }) => {
+            ContextNotification::Mcp(McpNotification::CodeActionsUpdated {
+                project,
+                action_count,
+            }) => {
                 format!("Code actions updated for project {:?}: {} actions available", project, action_count)
             }
             ContextNotification::ProjectAdded(_) => "Project Added".to_string(),
@@ -106,10 +120,8 @@ impl ContextNotification {
                     let indexing_count = descriptions.iter().filter(|d| d.is_indexing_lsp).count();
                     let ready_count = project_count - indexing_count;
 
-                    let mut parts = vec![
-                        format!("Projects: {} total", project_count),
-                        format!("🚀 Ready: {}", ready_count),
-                    ];
+                    let mut parts =
+                        vec![format!("Projects: {} total", project_count), format!("🚀 Ready: {}", ready_count)];
 
                     if indexing_count > 0 {
                         parts.push(format!("🔄 Indexing: {}", indexing_count));
@@ -141,11 +153,7 @@ pub struct Context {
 }
 
 impl Context {
-    pub async fn new(
-        transport: TransportType,
-        config_path: PathBuf,
-        notifier: Sender<ContextNotification>,
-    ) -> Self {
+    pub async fn new(transport: TransportType, config_path: PathBuf, notifier: Sender<ContextNotification>) -> Self {
         let (lsp_sender, lsp_receiver) = flume::unbounded();
         let (mcp_sender, mcp_receiver) = flume::unbounded();
 
@@ -191,8 +199,14 @@ impl Context {
     pub fn address_information(&self) -> (String, u16) {
         match &self.transport {
             TransportType::Stdio => ("stdio".to_string(), 0),
-            TransportType::Sse { host, port } => (host.clone(), *port),
-            TransportType::StreamableHttp { host, port } => (host.clone(), *port),
+            TransportType::Sse {
+                host,
+                port,
+            } => (host.clone(), *port),
+            TransportType::StreamableHttp {
+                host,
+                port,
+            } => (host.clone(), *port),
         }
     }
 
@@ -201,13 +215,15 @@ impl Context {
 
         let template = match &self.transport {
             TransportType::Stdio => CONFIG_TEMPLATE_STDIO,
-            TransportType::Sse { .. } => CONFIG_TEMPLATE_SSE,
-            TransportType::StreamableHttp { .. } => CONFIG_TEMPLATE_STREAMABLE_HTTP,
+            TransportType::Sse {
+                ..
+            } => CONFIG_TEMPLATE_SSE,
+            TransportType::StreamableHttp {
+                ..
+            } => CONFIG_TEMPLATE_STREAMABLE_HTTP,
         };
 
-        template
-            .replace("{{HOST}}", &host)
-            .replace("{{PORT}}", &port.to_string())
+        template.replace("{{HOST}}", &host).replace("{{PORT}}", &port.to_string())
     }
 
     pub fn config_path(&self) -> &PathBuf {
@@ -237,6 +253,7 @@ impl Context {
                 let ser_project = SerProject {
                     root: pc.project.root().clone(),
                     ignore_crates: pc.project.ignore_crates().to_vec(),
+                    rust_analyzer: pc.project.rust_analyzer().cloned(),
                 };
                 (path, ser_project)
             })
@@ -260,10 +277,7 @@ impl Context {
         let config_path = self.config_path();
 
         if !config_path.exists() {
-            tracing::warn!(
-                "Configuration file not found at {:?}, skipping load.",
-                config_path
-            );
+            tracing::warn!("Configuration file not found at {:?}, skipping load.", config_path);
             return Ok(());
         }
 
@@ -276,30 +290,26 @@ impl Context {
         };
 
         if toml_string.trim().is_empty() {
-            tracing::warn!(
-                "Configuration file {:?} is empty, skipping load.",
-                config_path
-            );
+            tracing::warn!("Configuration file {:?} is empty, skipping load.", config_path);
             return Ok(());
         }
 
-        let loaded_config: SerConfig = match toml::from_str(&toml_string) {
+        // let loaded_config: SerConfig = match toml::from_str(&toml_string) {
+        let mut loaded_config: SerConfig = match toml::from_str(&toml_string) {
             Ok(config) => config,
             Err(e) => {
-                tracing::error!(
-                    "Failed to parse TOML from config file {:?}: {}",
-                    config_path,
-                    e
-                );
+                tracing::error!("Failed to parse TOML from config file {:?}: {}", config_path, e);
                 // Don't return error here, maybe the file is corrupt but we can continue
                 return Ok(());
             }
         };
 
-        for (_, ser_project) in loaded_config.projects {
+        for (_, ser_project) in &mut loaded_config.projects {
             let project = Project {
                 root: ser_project.root.clone(),
-                ignore_crates: ser_project.ignore_crates,
+                // ignore_crates: ser_project.ignore_crates,
+                ignore_crates: mem::take(&mut ser_project.ignore_crates),
+                rust_analyzer: ser_project.rust_analyzer.take(),
             };
             // Validate project root before adding
             if !project.root().exists() || !project.root().is_dir() {
@@ -313,19 +323,11 @@ impl Context {
             match Project::new(project.root()) {
                 Ok(new_project) => {
                     if let Err(e) = self.add_project(new_project).await {
-                        tracing::error!(
-                            "Failed to add project {:?} from config: {}",
-                            project.root(),
-                            e
-                        );
+                        tracing::error!("Failed to add project {:?} from config: {}", project.root(), e);
                     }
                 }
                 Err(e) => {
-                    tracing::error!(
-                        "Failed to create project for root {:?} from config: {}",
-                        project.root(),
-                        e
-                    );
+                    tracing::error!("Failed to create project for root {:?} from config: {}", project.root(), e);
                 }
             }
         }
@@ -376,10 +378,7 @@ impl Context {
 
     /// Remove a project from the context by path or name
     #[allow(dead_code)]
-    pub async fn remove_project_by_path_or_name(
-        &self,
-        path_or_name: &str,
-    ) -> Option<Arc<ProjectContext>> {
+    pub async fn remove_project_by_path_or_name(&self, path_or_name: &str) -> Option<Arc<ProjectContext>> {
         // First try to find by name
         if let Some(root) = self.find_project_by_name(path_or_name).await {
             return self.remove_project(&root).await;
@@ -399,10 +398,7 @@ impl Context {
         let project = self.projects.remove(root).map(|(_, v)| v);
 
         if project.is_some() {
-            if let Err(e) = self
-                .notifier
-                .send(ContextNotification::ProjectRemoved(root.clone()))
-            {
+            if let Err(e) = self.notifier.send(ContextNotification::ProjectRemoved(root.clone())) {
                 tracing::error!("Failed to send project removed notification: {}", e);
             }
             // Write config after successfully removing
@@ -418,9 +414,7 @@ impl Context {
         let notifier = self.notifier.clone();
         tokio::spawn(async move {
             let project_descriptions = project_descriptions(&projects).await;
-            if let Err(e) = notifier.send(ContextNotification::ProjectDescriptions(
-                project_descriptions,
-            )) {
+            if let Err(e) = notifier.send(ContextNotification::ProjectDescriptions(project_descriptions)) {
                 tracing::error!("Failed to send project descriptions: {}", e);
             }
         });
@@ -505,27 +499,44 @@ pub struct SerConfig {
 pub struct SerProject {
     pub root: PathBuf,
     pub ignore_crates: Vec<String>,
+    #[serde(rename = "rust-analyzer")]
+    pub rust_analyzer: Option<RustAnalyzerConfig>,
 }
 
-async fn project_descriptions(
-    projects: &DashMap<PathBuf, Arc<ProjectContext>>,
-) -> Vec<ProjectDescription> {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RustAnalyzerConfig {
+    pub check: Option<CheckConfig>,
+    pub cargo: Option<CargoConfig>,
+    #[serde(rename = "procMacro")]
+    pub proc_macro: Option<ProcMacroConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CheckConfig {
+    pub command: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CargoConfig {
+    pub target: Option<String>,
+    #[serde(rename = "extraEnv")]
+    pub extra_env: Option<HashMap<String, String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ProcMacroConfig {
+    pub ignored: Option<HashMap<String, Vec<String>>>,
+}
+
+async fn project_descriptions(projects: &DashMap<PathBuf, Arc<ProjectContext>>) -> Vec<ProjectDescription> {
     projects
         .iter()
         .map(|entry| {
             let project = entry.value();
             ProjectDescription {
                 root: project.project.root().clone(),
-                name: project
-                    .project
-                    .root()
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string(),
-                is_indexing_lsp: project
-                    .is_indexing_lsp
-                    .load(std::sync::atomic::Ordering::Relaxed),
+                name: project.project.root().file_name().unwrap().to_string_lossy().to_string(),
+                is_indexing_lsp: project.is_indexing_lsp.load(std::sync::atomic::Ordering::Relaxed),
             }
         })
         .collect()
